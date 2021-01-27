@@ -1,5 +1,6 @@
 // Copyright 2000-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
-package com.intellij.openapi.editor;
+// Modifications by foreverigor
+package me.foreverigor.intellij.plugin.streamtips;
 
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer;
 import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerImpl;
@@ -31,6 +32,10 @@ import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.application.impl.LaterInvocator;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.EditorFactory;
+import com.intellij.openapi.editor.VisualPosition;
 import com.intellij.openapi.editor.event.*;
 import com.intellij.openapi.editor.ex.*;
 import com.intellij.openapi.editor.ex.util.EditorUtil;
@@ -79,8 +84,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 @Service
-public final class EditorMouseHoverPopupManager implements Disposable {
-  private static final Logger LOG = Logger.getInstance(EditorMouseHoverPopupManager.class);
+public final class MouseHoverIntentPreviewPopupService implements Disposable {
+  private static final Logger LOG = Logger.getInstance(MouseHoverIntentPreviewPopupService.class);
   private static final Key<Boolean> DISABLE_BINDING = Key.create("EditorMouseHoverPopupManager.disable.binding");
   private static final TooltipGroup EDITOR_INFO_GROUP = new TooltipGroup("EDITOR_INFO_GROUP", 0);
   private static final int MAX_POPUP_WIDTH = 650;
@@ -96,7 +101,7 @@ public final class EditorMouseHoverPopupManager implements Disposable {
   private CancellablePromise<Context> myPreparationTask;
   private boolean mySkipNextMovement;
 
-  public EditorMouseHoverPopupManager() {
+  public MouseHoverIntentPreviewPopupService() {
     myAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
     EditorEventMulticaster multicaster = EditorFactory.getInstance().getEventMulticaster();
     multicaster.addCaretListener(new CaretListener() {
@@ -754,8 +759,8 @@ public final class EditorMouseHoverPopupManager implements Disposable {
   }
 
   @NotNull
-  public static EditorMouseHoverPopupManager getInstance() {
-    return ApplicationManager.getApplication().getService(EditorMouseHoverPopupManager.class);
+  public static MouseHoverIntentPreviewPopupService getInstance() {
+    return ApplicationManager.getApplication().getService(MouseHoverIntentPreviewPopupService.class);
   }
 
   @Nullable

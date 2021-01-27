@@ -1,0 +1,4 @@
+.idea/*
+!.idea/modules.xml
+.DS_Store
+
