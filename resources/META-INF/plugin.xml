@@ -1,7 +1,7 @@
 <idea-plugin>
   <id>me.foreverigor.streamtips</id>
   <name>Java Stream Tool Tips</name>
-  <version>1.0</version>
+  <version>0.x</version>
   <vendor email="foreverigordev@gmail.com" url="http://www.yourcompany.com">foreverigor</vendor>
 
   <description><![CDATA[
@@ -15,7 +15,7 @@
     ]]>
   </change-notes>
 
-  <idea-version since-build="202.5105"/>
+  <idea-version since-build="202.5800"/>
 
   <depends>com.intellij.modules.platform</depends>
   <depends>com.intellij.java</depends>
