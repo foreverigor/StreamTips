@@ -6,7 +6,7 @@ import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer;
 import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerImpl;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.codeInsight.documentation.DocumentationManager;
-import com.intellij.codeInsight.lookup.LookupManager;
+import com.intellij.codeInsight.intention.IntentionAction;
 import com.intellij.ide.IdeEventQueue;
 import com.intellij.injected.editor.DocumentWindow;
 import com.intellij.lang.annotation.HighlightSeverity;
@@ -25,22 +25,24 @@ import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
 import com.intellij.openapi.editor.VisualPosition;
 import com.intellij.openapi.editor.event.*;
-import com.intellij.openapi.editor.ex.*;
+import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.impl.EditorMouseHoverPopupControl;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.util.ProgressIndicatorBase;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopup;
-import com.intellij.openapi.ui.popup.util.PopupUtil;
+import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.registry.Registry;
+import com.intellij.pom.java.LanguageLevel;
 import com.intellij.psi.*;
 import com.intellij.reference.SoftReference;
-import com.intellij.ui.*;
+import com.intellij.ui.MouseMovementTracker;
 import com.intellij.ui.popup.AbstractPopup;
 import com.intellij.ui.popup.PopupFactoryImpl;
 import com.intellij.util.Alarm;
 import com.intellij.util.concurrency.AppExecutorUtil;
+import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.concurrency.CancellablePromise;
@@ -52,6 +54,8 @@ import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.lang.ref.WeakReference;
 import java.util.Objects;
+
+import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
 
 @Service
 public final class MouseHoverIntentPreviewPopupService implements Disposable {
@@ -129,8 +133,11 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       closePopup();
       return;
     }
-    // TODO get sourceFile
-    myPreparationTask = ReadAction.nonBlocking(() -> createContext(editor, targetOffset, startTimestamp))
+    PsiFile sourceFile;
+    if ((sourceFile = getPsiFileIfApplicable(editor)) == null) {
+      return;
+    }
+    myPreparationTask = ReadAction.nonBlocking(() -> createContext(editor, sourceFile, targetOffset, startTimestamp))
       .coalesceBy(this)
       .withDocumentsCommitted(Objects.requireNonNull(editor.getProject()))
       .expireWhen(() -> editor.isDisposed())
@@ -167,7 +174,8 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     myCurrentProgress = progress;
     myAlarm.addRequest(() -> {
       ProgressManager.getInstance().executeProcessUnderProgress(() -> {
-        // TODO calculation
+        final IntentionAction fixAction = context.calculateQuickFixForPopup(myCurrentProgress);
+        if (fixAction == null) return;
         ApplicationManager.getApplication().invokeLater(() -> {
           if (progress != myCurrentProgress) {
             return;
@@ -205,37 +213,10 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
            currentHintBounds != null && myKeepPopupOnMouseMove;
   }
 
-  private static boolean isPopupDisabled(Editor editor) {
-    return isAnotherAppInFocus() ||
-           EditorMouseHoverPopupControl.arePopupsDisabled(editor) ||
-           LookupManager.getActiveLookup(editor) != null ||
-           isAnotherPopupFocused() ||
-           isContextMenuShown();
-  }
-
-  private static boolean isAnotherAppInFocus() {
-    return KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusedWindow() == null;
-  }
-
-  // e.g. if documentation popup (opened via keyboard shortcut) is already shown
-  private static boolean isAnotherPopupFocused() {
-    JBPopup popup = PopupUtil.getPopupContainerFor(KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner());
-    return popup != null && !popup.isDisposed();
-  }
-
-  private static boolean isContextMenuShown() {
-    return MenuSelectionManager.defaultManager().getSelectedPath().length > 0;
-  }
-
   private Rectangle getCurrentPopupBounds(Editor editor) {
     JBPopup popup = getCurrentPopup();
     if (popup == null) return null;
-    Dimension size = popup.getSize();
-    if (size == null) return null;
-    Rectangle result = new Rectangle(popup.getLocationOnScreen(), size);
-    int borderTolerance = editor.getLineHeight() / 3;
-    result.grow(borderTolerance, borderTolerance);
-    return result;
+    return PopupUtils.getPopupBounds(editor, popup);
   }
 
   private void showPopup(AbstractPopup hint, Editor editor, PopupTipContext context) {
@@ -282,7 +263,8 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     return -1;
   }
 
-  private static PopupTipContext createContext(Editor editor, int offset, long startTimestamp) {
+  @Nullable
+  private static PopupTipContext createContext(@NotNull Editor editor, @NotNull PsiFile file, int offset, long startTimestamp) {
     Project project = Objects.requireNonNull(editor.getProject());
 
     HighlightInfo info = null;
@@ -292,9 +274,33 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       info = daemonCodeAnalyzer
         .findHighlightsByOffset(editor.getDocument(), offset, false, highestPriorityOnly, HighlightSeverity.INFORMATION);
     }
+    Pair<Integer, PsiElement> elementAndOffset = getPsiElementAtOffset(file, offset);
+    if (elementAndOffset == null) return null;
 
-    return null;
+    return new PopupTipContext(startTimestamp, info, file, elementAndOffset.first, elementAndOffset.second);
   }
+
+  /**
+   * Adapted from
+   * {@link com.intellij.codeInsight.daemon.impl.DoNotShowInspectionIntentionMenuContributor#collectActions(Editor, PsiFile, ShowIntentionsPass.IntentionsInfo, int, int)}
+   */
+  @Nullable
+  private static Pair<Integer, PsiElement> getPsiElementAtOffset(@NotNull PsiFile psiFile, int offset) {
+    final PsiElement psiElement = psiFile.findElementAt(offset);
+    if (psiElement == null) {
+      return null;
+    }
+    int intentionOffset = offset;
+    PsiElement intentionElement = psiElement;
+    if (psiElement instanceof PsiWhiteSpace && offset == psiElement.getTextRange().getStartOffset() && offset > 0) {
+      final PsiElement prev = psiFile.findElementAt(offset - 1);
+      if (prev != null && prev.isValid()) {
+        intentionElement = prev;
+        intentionOffset = offset - 1;
+      }
+    }
+    return Pair.create(intentionOffset, intentionElement);
+  } // Pair<Integer, PsiElement> getPsiElementAtOffset(@NotNull PsiFile psiFile, int offset)
 
   private void cancelAndClosePopup() {
     cancelCurrentProcessing();
@@ -349,6 +355,14 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       this.highlightInfo = highlightInfo == null ? null : new WeakReference<>(highlightInfo);
       this.targetElement = new WeakReference<>(elementForPopup);
       this.psiFile = new WeakReference<>(file);
+    }
+
+    @Nullable
+    private IntentionAction calculateQuickFixForPopup(ProgressIndicator progress) {
+      PsiElement element = getElementForInspection();
+      PsiFile file = getFileForInspection();
+      if (element == null || file == null) return null;
+      return ManualInspectionRunner.inspectElementsForApplicableIntention(file, element, targetOffset, progress);
     }
 
     private PsiElement getElementForInspection() {
@@ -418,6 +432,18 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }
   } // class PopupTipContext
 
+  private PsiFile getPsiFileIfApplicable(@NotNull Editor editor) {
+    try {
+      Document editorDocument = editor.getDocument();
+      PsiFile psiFile = PsiDocumentManager.getInstance(Objects.requireNonNull(editor.getProject())).getPsiFile(editorDocument);
+      if (psiFile instanceof PsiJavaFile) {
+        if (((PsiJavaFile) psiFile).getLanguageLevel().isAtLeast(LanguageLevel.JDK_1_8))
+          return psiFile;
+      }
+    } catch (Exception e) {}
+    return null;
+  } // PsiFile getPsiFileIfApplicable(@NotNull Editor editor)
+
   @NotNull
   public static MouseHoverIntentPreviewPopupService getInstance() {
     return ApplicationManager.getApplication().getService(MouseHoverIntentPreviewPopupService.class);
@@ -455,4 +481,4 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       getInstance().cancelAndClosePopup();
     }
   }
-}
+} // class MouseHoverIntentPreviewPopupService
