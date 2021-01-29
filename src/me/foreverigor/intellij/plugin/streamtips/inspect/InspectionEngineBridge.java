@@ -19,7 +19,10 @@ import static me.foreverigor.intellij.plugin.streamtips.inspect.InspectionEngine
 /**
  * Exposes the pkg-private method
  * {@link InspectionEngine#inspectElements(List, PsiFile, InspectionManager, boolean, ProgressIndicator, List, Set)}
- * which is needed for ManualInspectionRunner
+ * which is needed for ManualInspectionRunner. <p>
+ * There could be another, better way of accessing the method (loading this class in the right ClassLoader or reloading
+ * InspectionEnging into the plugin loader) but I'm not sure how it could be done, just calling the method from a plugin
+ * class in the same package gives an IllegalAccessException
  */
 public class InspectionEngineBridge {
 

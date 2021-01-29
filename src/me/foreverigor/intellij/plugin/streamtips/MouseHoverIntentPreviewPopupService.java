@@ -14,10 +14,7 @@ import com.intellij.lang.injection.InjectedLanguageManager;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.ex.AnActionListener;
-import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.application.ModalityState;
-import com.intellij.openapi.application.ModalityStateListener;
-import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.application.*;
 import com.intellij.openapi.application.impl.LaterInvocator;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.editor.Document;
@@ -32,6 +29,7 @@ import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.util.ProgressIndicatorBase;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopup;
+import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.registry.Registry;
 import com.intellij.pom.java.LanguageLevel;
@@ -42,12 +40,13 @@ import com.intellij.ui.popup.AbstractPopup;
 import com.intellij.ui.popup.PopupFactoryImpl;
 import com.intellij.util.Alarm;
 import com.intellij.util.concurrency.AppExecutorUtil;
-import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.concurrency.CancellablePromise;
 
-import javax.swing.*;
+import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
+import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
+
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
@@ -55,20 +54,22 @@ import java.awt.event.WindowEvent;
 import java.lang.ref.WeakReference;
 import java.util.Objects;
 
-import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
-
+/**
+ * Adapted from {@link com.intellij.openapi.editor.EditorMouseHoverPopupManager}
+ */
 @Service
 public final class MouseHoverIntentPreviewPopupService implements Disposable {
 
+  // Concurrency:
   private final Alarm myAlarm;
-  private final MouseMovementTracker myMouseMovementTracker = new MouseMovementTracker();
-  private boolean myKeepPopupOnMouseMove;
-  private WeakReference<Editor> myCurrentEditor;
-  private WeakReference<AbstractPopup> myPopupReference;
-  private PopupTipContext myContext;
   private ProgressIndicator myCurrentProgress;
   private CancellablePromise<PopupTipContext> myPreparationTask;
-  private boolean mySkipNextMovement;
+
+  private final MouseMovementTracker myMouseMovementTracker = new MouseMovementTracker();
+  private WeakReference<Editor> myCurrentEditor;
+  private WeakReference<AbstractPopup> myPopupReference;
+  private PopupTipContext myContext; // TODO comparison of contexts
+  private boolean skipNextEvent;
 
   public MouseHoverIntentPreviewPopupService() {
     myAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
@@ -105,11 +106,11 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     IdeEventQueue.getInstance().addDispatcher(event -> {
       int eventID = event.getID();
       if (eventID == KeyEvent.KEY_PRESSED || eventID == KeyEvent.KEY_TYPED) {
-        cancelCurrentProcessing();
+        cancelAndClosePopup(); // Close on everything
       }
       return false;
     }, this);
-    ApplicationManager.getApplication().getMessageBus().connect(this).subscribe(AnActionListener.TOPIC, new EditorTypingListener());
+    //ApplicationManager.getApplication().getMessageBus().connect(this).subscribe(AnActionListener.TOPIC, new EditorTypingListener());
   }
 
   @Override
@@ -165,18 +166,19 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   }
 
   private void skipNextMovement() {
-    mySkipNextMovement = true;
+    skipNextEvent = true;
   }
 
   private void schedulePopupCalculation(@NotNull Editor editor,
                                         @NotNull PopupTipContext context) {
     ProgressIndicatorBase progress = new ProgressIndicatorBase();
     myCurrentProgress = progress;
+    Application application = ApplicationManager.getApplication();
     myAlarm.addRequest(() -> {
       ProgressManager.getInstance().executeProcessUnderProgress(() -> {
-        final IntentionAction fixAction = context.calculateQuickFixForPopup(myCurrentProgress);
+        final IntentionAction fixAction = application.runReadAction((Computable<IntentionAction>) () -> context.calculateQuickFixForPopup(progress));
         if (fixAction == null) return;
-        ApplicationManager.getApplication().invokeLater(() -> {
+        application.invokeLater(() -> {
           if (progress != myCurrentProgress) {
             return;
           }
@@ -187,13 +189,12 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
             return;
           }
 
-          JComponent component = null; // Create popup abstract
-          AbstractPopup popup = null; // TODO Create popup
-          if (popup == null) {
+          IntentionPreviewPopup fixPopup = IntentionPreviewPopup.createPopup(editor, context.getFileForInspection(), fixAction);
+          if (fixPopup == null) {
             closePopup();
           }
           else {
-            showPopup(popup, editor, context);
+            AbstractPopup popup = showPopup(fixPopup, editor, context);
             myPopupReference = new WeakReference<>(popup);
             myCurrentEditor = new WeakReference<>(editor);
             myContext = context;
@@ -204,13 +205,12 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   }
 
   private boolean ignoreEvent(EditorMouseEvent e) {
-    if (mySkipNextMovement) {
-      mySkipNextMovement = false;
+    if (skipNextEvent) {
+      skipNextEvent = false;
       return true;
     }
-    Rectangle currentHintBounds = getCurrentPopupBounds(e.getEditor());
-    return myMouseMovementTracker.isMovingTowards(e.getMouseEvent(), currentHintBounds) ||
-           currentHintBounds != null && myKeepPopupOnMouseMove;
+    Rectangle currentHintBounds = getCurrentPopupBounds(e.getEditor()); // don't keep popup on mouse move in general
+    return myMouseMovementTracker.isMovingTowards(e.getMouseEvent(), currentHintBounds);
   }
 
   private Rectangle getCurrentPopupBounds(Editor editor) {
@@ -219,30 +219,33 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     return PopupUtils.getPopupBounds(editor, popup);
   }
 
-  private void showPopup(AbstractPopup hint, Editor editor, PopupTipContext context) {
+  @Nullable
+  private AbstractPopup showPopup(@NotNull IntentionPreviewPopup intentPopup, @NotNull Editor editor, PopupTipContext context) {
     closePopup();
     myMouseMovementTracker.reset();
-    myKeepPopupOnMouseMove = false;
-    editor.putUserData(PopupFactoryImpl.ANCHOR_POPUP_POSITION, context.getPopupPosition(editor));
+    editor.putUserData(PopupFactoryImpl.ANCHOR_POPUP_POSITION, context.getPopupPosition(editor)); // Our popup honors this
+    AbstractPopup popup;
     try {
-      hint.showInBestPositionFor(editor);
+      popup = intentPopup.show();
+      if (popup == null) return null; // Something went wrong
     }
     finally {
       editor.putUserData(PopupFactoryImpl.ANCHOR_POPUP_POSITION, null);
     }
-    Window window = hint.getPopupWindow();
+    Window window = popup.getPopupWindow();
     if (window != null) {
-      window.setFocusableWindowState(true);
+      //window.setFocusableWindowState(true); // Don't focus(!)
       IdeEventQueue.getInstance().addDispatcher(e -> {
         if (e.getID() == MouseEvent.MOUSE_PRESSED && e.getSource() == window) {
-          myKeepPopupOnMouseMove = true;
+          //myKeepPopupOnMouseMove = true; // This was made so that you can click inside the hint, not needed for now
         }
         else if (e.getID() == WindowEvent.WINDOW_OPENED && !isParentWindow(window, e.getSource())) {
           closePopup();
         }
         return false;
-      }, hint);
+      }, popup);
     }
+    return popup;
   }
 
   private static boolean isParentWindow(@NotNull Window parent, Object potentialChild) {
@@ -475,6 +478,11 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }
   }
 
+  /**
+   * Don't listen for beforeActionPerformed here, closing the popup here leads to an exception in a different call of it where
+   * {@link com.intellij.openapi.editor.impl.InspectionPopupManager#hidePopup()} gets called.
+   * beforeEditorTyping also not needed because we close on every keypress
+   */
   private static class EditorTypingListener implements AnActionListener {
     @Override
     public void beforeEditorTyping(char c, @NotNull DataContext dataContext) {
