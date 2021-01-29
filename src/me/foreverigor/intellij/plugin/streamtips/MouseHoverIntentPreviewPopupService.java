@@ -53,6 +53,8 @@ import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.lang.ref.WeakReference;
 import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 
 /**
  * Adapted from {@link com.intellij.openapi.editor.EditorMouseHoverPopupManager}
@@ -63,7 +65,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   // Concurrency:
   private final Alarm myAlarm;
   private ProgressIndicator myCurrentProgress;
-  private CancellablePromise<PopupTipContext> myPreparationTask;
+  private CancellablePromise<?> myPreparationTask;
 
   private final MouseMovementTracker myMouseMovementTracker = new MouseMovementTracker();
   private WeakReference<Editor> myCurrentEditor;
@@ -116,6 +118,10 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   @Override
   public void dispose() {}
 
+  private static boolean earlyCalculate() {
+    return StreamTipsPluginUtils.getShouldEarlyCalculate();
+  }
+
   private void handleMouseMoved(@NotNull EditorMouseEvent e) {
     long startTimestamp = System.currentTimeMillis();
 
@@ -138,19 +144,79 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     if ((sourceFile = getPsiFileIfApplicable(editor)) == null) {
       return;
     }
-    myPreparationTask = ReadAction.nonBlocking(() -> createContext(editor, sourceFile, targetOffset, startTimestamp))
-      .coalesceBy(this)
-      .withDocumentsCommitted(Objects.requireNonNull(editor.getProject()))
-      .expireWhen(() -> editor.isDisposed())
-      .finishOnUiThread(ModalityState.any(), context -> {
+
+    NonBlockingReadAction<?> action;
+    if (earlyCalculate()) {
+      action = createPrepTask(() -> calculatePopup(editor, sourceFile, targetOffset, startTimestamp), result -> {
+        myPreparationTask = null;
+        if (result == null || !editor.getContentComponent().isShowing()) {
+          closePopup();
+          return;
+        }
+        schedulePopupDisplay(editor, result.first, result.second);
+      });
+    } else {
+      action = createPrepTask(() -> createContext(editor, sourceFile, targetOffset, startTimestamp), context -> {
         myPreparationTask = null;
         if (context == null || !editor.getContentComponent().isShowing()) {
           closePopup();
           return;
         }
         schedulePopupCalculation(editor, context);
-      })
+      });
+    }
+
+    myPreparationTask = action
+      .coalesceBy(this)
+      .withDocumentsCommitted(Objects.requireNonNull(editor.getProject()))
+      .expireWhen(() -> editor.isDisposed())
       .submit(AppExecutorUtil.getAppExecutorService());
+  }
+
+  private static <T> NonBlockingReadAction<T> createPrepTask(Callable<T> calculation, Consumer<T> calculationConsumer) {
+    return ReadAction.nonBlocking(calculation).finishOnUiThread(ModalityState.any(), calculationConsumer);
+  }
+
+  private Pair<PopupTipContext, IntentionAction> calculatePopup(@NotNull Editor editor, @NotNull PsiFile file, int offset, long startTimestamp) {
+    // When running calculations right away getting psi, context creation and quickFix calc can be chained together like
+    // this (everything runs in read action):
+    PopupTipContext context = createContext(editor, file, offset, startTimestamp);
+    if (context == null) return null;
+    myCurrentProgress = new ProgressIndicatorBase();
+    final IntentionAction action = ProgressManager.getInstance().runProcess(() -> {
+      return context.calculateQuickFixForPopup(myCurrentProgress);
+    }, myCurrentProgress); // Unclear if this is slower than executeUnderProgress
+    return action != null ? Pair.create(context, action) : null;
+  }
+
+  private void schedulePopupDisplay(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action) {
+    if (myCurrentProgress == null) return;
+    ProgressIndicator originalProgress = myCurrentProgress;
+    myAlarm.addRequest(() -> {
+      ProgressManager.getInstance().executeProcessUnderProgress(() -> ApplicationManager.getApplication().invokeLater(() -> {
+        createAndShowPopup(editor, context, action, originalProgress);
+      }), originalProgress);
+    }, context.getShowingDelay());
+  }
+
+  private void createAndShowPopup(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action, ProgressIndicator originalProgress) {
+    if (originalProgress != myCurrentProgress) {
+      return;
+    }
+    myCurrentProgress = null;
+    if (!editor.getContentComponent().isShowing() || isPopupDisabled(editor)) {
+      return;
+    }
+
+    IntentionPreviewPopup fixPopup = IntentionPreviewPopup.createPopup(editor, context.getFileForInspection(), action);
+    if (fixPopup == null) {
+      closePopup();
+    } else {
+      AbstractPopup popup = showPopup(fixPopup, editor, context);
+      myPopupReference = new WeakReference<>(popup);
+      myCurrentEditor = new WeakReference<>(editor);
+      myContext = context;
+    }
   }
 
   private void cancelCurrentProcessing() {
@@ -202,6 +268,18 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
         });
       }, progress);
     }, context.getShowingDelay());
+  }
+
+  private void scheduleUnderProgress(Runnable runnable, ProgressIndicator progress, @NotNull PopupTipContext context) {
+    scheduleWithContextDelay(() -> underProgress(runnable, progress), context);
+  }
+
+  private void scheduleWithContextDelay(Runnable runnable, @NotNull PopupTipContext context) {
+    myAlarm.addRequest(runnable, context.getShowingDelay());
+  }
+
+  private static void underProgress(Runnable runnable, ProgressIndicator progress) {
+    ProgressManager.getInstance().executeProcessUnderProgress(runnable, progress);
   }
 
   private boolean ignoreEvent(EditorMouseEvent e) {
@@ -279,7 +357,6 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }
     Pair<Integer, PsiElement> elementAndOffset = getPsiElementAtOffset(file, offset);
     if (elementAndOffset == null) return null;
-
     return new PopupTipContext(startTimestamp, info, file, elementAndOffset.first, elementAndOffset.second);
   }
 
