@@ -44,6 +44,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.concurrency.CancellablePromise;
 
+import me.foreverigor.intellij.platform.annotations.InvokedLater;
+import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
 import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
 import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
 
@@ -147,13 +149,12 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
 
     NonBlockingReadAction<?> action;
     if (earlyCalculate()) {
-      action = createPrepTask(() -> calculatePopup(editor, sourceFile, targetOffset, startTimestamp), result -> {
-        myPreparationTask = null;
-        if (result == null || !editor.getContentComponent().isShowing()) {
-          closePopup();
-          return;
-        }
-        schedulePopupDisplay(editor, result.first, result.second);
+      ProgressIndicator progressAll = new ProgressIndicatorBase();
+      action = createPrepTask(() -> calculatePopup(editor, sourceFile, targetOffset, startTimestamp, progressAll), result -> {
+        // All on dispatch thread:
+        if (preparationCleanup(result, editor)) return;
+
+        schedulePopupCreation(editor, result.first, result.second, progressAll);
       });
     } else {
       action = createPrepTask(() -> createContext(editor, sourceFile, targetOffset, startTimestamp), context -> {
@@ -173,46 +174,77 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       .submit(AppExecutorUtil.getAppExecutorService());
   }
 
-  private static <T> NonBlockingReadAction<T> createPrepTask(Callable<T> calculation, Consumer<T> calculationConsumer) {
+  private static <T> NonBlockingReadAction<T> createPrepTask(Callable<T> calculation, @OnDispatchThread Consumer<T> calculationConsumer) {
     return ReadAction.nonBlocking(calculation).finishOnUiThread(ModalityState.any(), calculationConsumer);
   }
 
-  private Pair<PopupTipContext, IntentionAction> calculatePopup(@NotNull Editor editor, @NotNull PsiFile file, int offset, long startTimestamp) {
+  /**
+   * @return true if should cancel
+   */
+  private <T> boolean preparationCleanup(T prepResult, Editor editor) {
+    myPreparationTask = null;
+    if (prepResult == null || !editor.getContentComponent().isShowing()) {
+      closePopup();
+      return true;
+    }
+    return false;
+  }
+
+  private Pair<PopupTipContext, IntentionAction> calculatePopup(@NotNull Editor editor, @NotNull PsiFile file, int offset, long startTimestamp, ProgressIndicator progress) {
     // When running calculations right away getting psi, context creation and quickFix calc can be chained together like
     // this (everything runs in read action):
     PopupTipContext context = createContext(editor, file, offset, startTimestamp);
     if (context == null) return null;
-    myCurrentProgress = new ProgressIndicatorBase();
+    myCurrentProgress = progress; // This is where the calculation task sort of actually begins
     final IntentionAction action = ProgressManager.getInstance().runProcess(() -> {
       return context.calculateQuickFixForPopup(myCurrentProgress);
     }, myCurrentProgress); // Unclear if this is slower than executeUnderProgress
     return action != null ? Pair.create(context, action) : null;
   }
 
-  private void schedulePopupDisplay(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action) {
-    if (myCurrentProgress == null) return;
-    ProgressIndicator originalProgress = myCurrentProgress;
+  private void schedulePopupCreation(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action, ProgressIndicator progress) {
     myAlarm.addRequest(() -> {
-      ProgressManager.getInstance().executeProcessUnderProgress(() -> ApplicationManager.getApplication().invokeLater(() -> {
-        createAndShowPopup(editor, context, action, originalProgress);
-      }), originalProgress);
+      ApplicationManager.getApplication().invokeLater(() -> {
+        createAndShowPopup(editor, context, action, progress);
+      });
     }, context.getShowingDelay());
   }
 
-  private void createAndShowPopup(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action, ProgressIndicator originalProgress) {
-    if (originalProgress != myCurrentProgress) {
-      return;
+  private IntentionPreviewPopup createPopup(@NotNull Editor editor,
+                                            @NotNull PopupTipContext context,
+                                            @NotNull IntentionAction action) {
+    if (editor.getContentComponent().isShowing() && !isPopupDisabled(editor)) {
+      IntentionPreviewPopup fixPopup = IntentionPreviewPopup.createPopup(editor, context.getFileForInspection(), action);
+      if (fixPopup == null) closePopup();
+      return fixPopup;
     }
-    myCurrentProgress = null;
-    if (!editor.getContentComponent().isShowing() || isPopupDisabled(editor)) {
-      return;
-    }
+    return null;
+  }
 
-    IntentionPreviewPopup fixPopup = IntentionPreviewPopup.createPopup(editor, context.getFileForInspection(), action);
-    if (fixPopup == null) {
-      closePopup();
-    } else {
-      AbstractPopup popup = showPopup(fixPopup, editor, context);
+  @OnDispatchThread
+  @InvokedLater
+  private void createAndShowPopup(@NotNull Editor editor,
+                                  @NotNull PopupTipContext context,
+                                  @NotNull IntentionAction action,
+                                  ProgressIndicator originalProgress) {
+    if (originalProgress == myCurrentProgress) {
+      myCurrentProgress = null;
+      IntentionPreviewPopup popup = createPopup(editor, context, action);
+      if (popup != null) {
+        showPopupAndSet(popup, editor, context);
+      }
+    }
+  }
+
+  @OnDispatchThread
+  private void showPopupAndSet(IntentionPreviewPopup intentPopup, @NotNull Editor editor, @NotNull PopupTipContext context) {
+    showPopupAndSet(() -> showPopup(intentPopup, editor, context), editor, context);
+  }
+
+  @OnDispatchThread
+  private void showPopupAndSet(Computable<AbstractPopup> showPopup, @NotNull Editor editor, @NotNull PopupTipContext context) {
+    AbstractPopup popup = showPopup.get();
+    if (popup != null) {
       myPopupReference = new WeakReference<>(popup);
       myCurrentEditor = new WeakReference<>(editor);
       myContext = context;
@@ -245,6 +277,8 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
         final IntentionAction fixAction = application.runReadAction((Computable<IntentionAction>) () -> context.calculateQuickFixForPopup(progress));
         if (fixAction == null) return;
         application.invokeLater(() -> {
+          // All dispatch thread
+          // TODO use new show popup
           if (progress != myCurrentProgress) {
             return;
           }
@@ -298,13 +332,20 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   }
 
   @Nullable
+  @OnDispatchThread
   private AbstractPopup showPopup(@NotNull IntentionPreviewPopup intentPopup, @NotNull Editor editor, PopupTipContext context) {
+    return showPopup(intentPopup::show, editor, context);
+  }
+
+  @Nullable
+  @OnDispatchThread
+  private AbstractPopup showPopup(@OnDispatchThread Computable<AbstractPopup> popupShow, @NotNull Editor editor, PopupTipContext context) {
     closePopup();
     myMouseMovementTracker.reset();
     editor.putUserData(PopupFactoryImpl.ANCHOR_POPUP_POSITION, context.getPopupPosition(editor)); // Our popup honors this
     AbstractPopup popup;
     try {
-      popup = intentPopup.show();
+      popup = popupShow.get();
       if (popup == null) return null; // Something went wrong
     }
     finally {
@@ -484,6 +525,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }
 
     @NotNull
+    @OnDispatchThread
     private VisualPosition getPopupPosition(Editor editor) {
       HighlightInfo highlightInfo = getHighlightInfo();
       if (highlightInfo == null) {

@@ -105,10 +105,10 @@ public class ManualInspectionRunner {
     /**
      * Converts a problemdescriptor to an IntentionAction by the means of {@link QuickFixWrapper}
      */
-    @NotNull
+    @Nullable
     private static IntentionAction adaptIntention(@NotNull PsiFile psiFile, @NotNull ProblemDescriptor descriptor) {
         if (psiFile instanceof ClsFileImpl) { // Workaround for Decompiled Class files
-            return new ClassFileIntentionActionWrapper(descriptor, 0);
+            return descriptor.getPsiElement() != null ? new ClassFileIntentionActionWrapper(descriptor) : null;
         }
         return InspectionUtils.adaptToIntentionAction(descriptor); // Should be StreamToLoopFix inside
     }
