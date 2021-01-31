@@ -124,6 +124,10 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     return StreamTipsPluginUtils.getShouldEarlyCalculate();
   }
 
+  private static boolean chainPopupLoading() {
+    return StreamTipsPluginUtils.getDrawPopupOnPreviewAvailable();
+  }
+
   private void handleMouseMoved(@NotNull EditorMouseEvent e) {
     long startTimestamp = System.currentTimeMillis();
 
@@ -149,12 +153,19 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
 
     NonBlockingReadAction<?> action;
     if (earlyCalculate()) {
-      ProgressIndicator progressAll = new ProgressIndicatorBase();
+      ProgressIndicator progressAll = new ProgressIndicatorBase(); // we tear apart the loading stages in this variant of loading,
+      // so this outer progress is our way to glue them back together
       action = createPrepTask(() -> calculatePopup(editor, sourceFile, targetOffset, startTimestamp, progressAll), result -> {
         // All on dispatch thread:
         if (preparationCleanup(result, editor)) return;
+        // unlike createContext(), calculatePopup() takes time, so check if cancelled here too when we are back on ui:
+        if (canceled(progressAll)) return;
 
-        schedulePopupCreation(editor, result.first, result.second, progressAll);
+        if (chainPopupLoading()) {
+          createPopupStartLoading(editor, result.first, result.second, progressAll);
+        } else {
+          schedulePopupCreation(editor, result.first, result.second, progressAll);
+        }
       });
     } else {
       action = createPrepTask(() -> createContext(editor, sourceFile, targetOffset, startTimestamp), context -> {
@@ -181,6 +192,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   /**
    * @return true if should cancel
    */
+  @OnDispatchThread
   private <T> boolean preparationCleanup(T prepResult, Editor editor) {
     myPreparationTask = null;
     if (prepResult == null || !editor.getContentComponent().isShowing()) {
@@ -190,6 +202,8 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     return false;
   }
 
+  @Nullable
+  @InvokedLater
   private Pair<PopupTipContext, IntentionAction> calculatePopup(@NotNull Editor editor, @NotNull PsiFile file, int offset, long startTimestamp, ProgressIndicator progress) {
     // When running calculations right away getting psi, context creation and quickFix calc can be chained together like
     // this (everything runs in read action):
@@ -210,6 +224,58 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }, context.getShowingDelay());
   }
 
+  /**
+   * Entrypoint for new popup creation/loading logic. This not only pushes the inspection calculation to an earlier
+   * point like {@link #schedulePopupCreation(Editor, PopupTipContext, IntentionAction, ProgressIndicator)} does,
+   * it also chains the start of popup loading to it, making all the calculations execute as soon as possible.
+   * As the popup loading involves a lengthy calculation of the preview, this is the only way how to hide the loading
+   * process (drawn in the popup) from the user and honor a very low delay setting (only to a degree).
+   *
+   * <p> How this works: kicking off the popup loading normally leads to it being drawn with the "loading" text, this is
+   * what {@link #showPopup(IntentionPreviewPopup, Editor, PopupTipContext)} does. When performing early popup loading
+   * we want to prevent this (or else the popup would always appear before the specified delay). So, new logic in
+   * IntentionPreviewPopup let's us intercept the popup starting to load and prevent it from showing immediately and,
+   * ideally, get a callback of exactly when the preview is finished so we can schedule showing the popup.
+   */
+  @OnDispatchThread
+  private void createPopupStartLoading(@NotNull Editor editor,
+                                       @NotNull PopupTipContext context,
+                                       @NotNull IntentionAction action,
+                                       ProgressIndicator originalProgress) {
+    IntentionPreviewPopup intentPopup = createPopup(editor, context, action);
+    if (intentPopup != null) {
+      intentPopup.startLoading((immediateShow, popup) -> onPopupLoadingFinished(immediateShow, popup, editor, context, originalProgress));
+    }
+  }
+
+  /**
+   * Gets called from IntentionPreviewPopup when popup has finished loading (usually), progress has to be checked (!)
+   * @param showPopupImmediately if set, draw the popup immediately (this is when setting the listener failed)
+   */
+  @InvokedLater
+  private void onPopupLoadingFinished(boolean showPopupImmediately,
+                                      @NotNull AbstractPopup popup,
+                                      @NotNull Editor editor,
+                                      @NotNull PopupTipContext context,
+                                      ProgressIndicator progress) {
+    if (canceled(progress)) return;
+
+    if (showPopupImmediately || context.getShowingDelay() == 0) {
+      showPopupAndSet(popup, editor, context); // We are on dispatch and can show immediately
+    } else {
+      schedulePopupDisplay(popup, editor, context, progress);
+    }
+  }
+
+  private void schedulePopupDisplay(@NotNull AbstractPopup popup, @NotNull Editor editor, @NotNull PopupTipContext context, ProgressIndicator progress) {
+    myAlarm.cancelAllRequests(); // if there other requests we scheduled, cancel them
+    scheduleWithContextDelay((@InvokedLater Runnable)() -> ApplicationManager.getApplication().invokeLater(() -> {
+      if (canceled(progress)) return; // Important to check here if canceled
+      showPopupAndSet(popup, editor, context);
+    }), context);
+  }
+
+  @Nullable
   private IntentionPreviewPopup createPopup(@NotNull Editor editor,
                                             @NotNull PopupTipContext context,
                                             @NotNull IntentionAction action) {
@@ -242,6 +308,14 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   }
 
   @OnDispatchThread
+  private void showPopupAndSet(AbstractPopup popup, @NotNull Editor editor, @NotNull PopupTipContext context) {
+    showPopupAndSet(() -> showPopup(popup, editor, context), editor, context);
+  }
+
+  /**
+   * Executes the showPopup action and then sets the resulting popup as current
+   */
+  @OnDispatchThread
   private void showPopupAndSet(Computable<AbstractPopup> showPopup, @NotNull Editor editor, @NotNull PopupTipContext context) {
     AbstractPopup popup = showPopup.get();
     if (popup != null) {
@@ -261,6 +335,10 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
       myCurrentProgress.cancel();
       myCurrentProgress = null;
     }
+  }
+
+  private boolean canceled(ProgressIndicator progress) {
+    return progress != myCurrentProgress;
   }
 
   private void skipNextMovement() {
@@ -308,7 +386,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     scheduleWithContextDelay(() -> underProgress(runnable, progress), context);
   }
 
-  private void scheduleWithContextDelay(Runnable runnable, @NotNull PopupTipContext context) {
+  private void scheduleWithContextDelay(@InvokedLater Runnable runnable, @NotNull PopupTipContext context) {
     myAlarm.addRequest(runnable, context.getShowingDelay());
   }
 
@@ -334,12 +412,29 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   @Nullable
   @OnDispatchThread
   private AbstractPopup showPopup(@NotNull IntentionPreviewPopup intentPopup, @NotNull Editor editor, PopupTipContext context) {
-    return showPopup(intentPopup::show, editor, context);
+    return showPopupInEditor(intentPopup::show, editor, context);
   }
 
+  /**
+   * Directly show the supplied AbstractPopup
+   */
+  @Nullable
+  private AbstractPopup showPopup(@NotNull AbstractPopup popup, @NotNull Editor editor, PopupTipContext context) {
+    return showPopupInEditor(() -> {
+      if (popup.isDisposed()) return null; // In some cases the popup may already be disposed when we arrive here
+      popup.showInBestPositionFor(editor);
+      return popup;
+    }, editor, context);
+  }
+
+  /**
+   * @param popupShow computable, call to which shows the popup
+   */
   @Nullable
   @OnDispatchThread
-  private AbstractPopup showPopup(@OnDispatchThread Computable<AbstractPopup> popupShow, @NotNull Editor editor, PopupTipContext context) {
+  private AbstractPopup showPopupInEditor(@OnDispatchThread Computable<AbstractPopup> popupShow,
+                                          @NotNull Editor editor,
+                                          PopupTipContext context) {
     closePopup();
     myMouseMovementTracker.reset();
     editor.putUserData(PopupFactoryImpl.ANCHOR_POPUP_POSITION, context.getPopupPosition(editor)); // Our popup honors this
