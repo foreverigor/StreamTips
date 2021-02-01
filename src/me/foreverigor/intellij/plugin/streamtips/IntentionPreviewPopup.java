@@ -2,6 +2,8 @@ package me.foreverigor.intellij.plugin.streamtips;
 
 import com.intellij.codeInsight.intention.IntentionAction;
 import com.intellij.codeInsight.intention.impl.preview.IntentionPreviewPopupUpdateProcessor;
+import com.intellij.ide.plugins.MultiPanel;
+import com.intellij.openapi.application.Experiments;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.project.Project;
@@ -20,15 +22,19 @@ import org.jetbrains.annotations.Nullable;
 
 import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
 import me.foreverigor.intellij.plugin.streamtips.inspect.overrides.ClassFileIntentionActionWrapper;
+import me.foreverigor.intellij.plugin.streamtips.popup.MultiPanelSelectListener;
 import me.foreverigor.utils.ReflectionUtils;
+import static me.foreverigor.intellij.plugin.streamtips.IntentionPreviewPopup.PopupFieldExtractorHolder.popupFieldGetter;
+import static me.foreverigor.intellij.plugin.streamtips.IntentionPreviewPopup.PopupFieldExtractorHolder.processorCancel;
 
 import java.lang.invoke.MethodHandle;
-import java.util.List;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Supplier;
+import java.lang.reflect.Method;
+import java.util.Objects;
+import java.util.function.*;
 
+/**
+ * TODO maybe reuse processor somehow
+ */
 class IntentionPreviewPopup {
 
     private final IntentionPreviewPopupUpdateProcessor popupProcessor;
@@ -40,7 +46,14 @@ class IntentionPreviewPopup {
     }
 
     IntentionPreviewPopup(@NotNull Project project, @NotNull PsiFile file, @NotNull Editor editor, @NotNull IntentionAction action) {
-        this(new IntentionPreviewPopupUpdateProcessor(project, file, editor), action);
+        this(createProcessor(project, file, editor), action);
+    }
+
+    private static IntentionPreviewPopupUpdateProcessor createProcessor(@NotNull Project project, @NotNull PsiFile file, @NotNull Editor editor) {
+        boolean showTrue = Experiments.getInstance().isFeatureEnabled("editor.intention.action.auto.preview");
+        IntentionPreviewPopupUpdateProcessor processor = new IntentionPreviewPopupUpdateProcessor(project, file, editor);
+        if (!showTrue) processor.toggleShow(); // toggle here because it's close to the actual check in the processor
+        return processor;
     }
 
     @Nullable
@@ -56,7 +69,6 @@ class IntentionPreviewPopup {
     @Nullable
     AbstractPopup startLoading(@Nullable BiConsumer<Boolean, AbstractPopup> showPopupCallback) {
         try {
-            popupProcessor.toggleShow(); // TODO show isn't false by default, depends on experiments setting
             return interceptPopup(supplier -> {
                 popupProcessor.setup(s -> (Unit) supplier.get(),0);
                 popupProcessor.updatePopup(myAction);
@@ -99,7 +111,8 @@ class IntentionPreviewPopup {
                 protected void doIntercept(@NotNull Object component) {
                     UiInterceptors.clear();
                     if (component instanceof AbstractPopup) { // TODO also check if this is really our popup (check call stack)
-                        popupRef.set((AbstractPopup)component);
+                        // the call we intercept, positionPopupInBestPosition() is one line above updateAdvertiserText call
+                        popupRef.set((AbstractPopup)component); // so this runs first, and we save one reflection call
                         if (!addPopupReadyInterceptor((AbstractPopup) component, popup -> showPopupCallback.accept(false, popup))) {
                             // Pretty bad, we couldn't set the loadingFinish listener so we will not receive a
                             // callback for scheduling showPopup, instead show popup immediately:
@@ -114,8 +127,8 @@ class IntentionPreviewPopup {
         }
         // 2nd variant which we do when popup loading isn't hidden and in case 3rd won't work
         // (in this case we will not be able to intercept showing the popup)
-        popupSetup.accept(() -> {
-            if (popupRef.isNull()) popupRef.set(extractPopup(popupProcessor));
+        popupSetup.accept(() -> { // Actually perform the popup update
+            if (popupRef.isNull()) popupRef.set(extractPopup(popupProcessor)); // Also makes it execute only one time
             return null;
         }); // After this returns, we should've extracted the popup field
         UiInterceptors.clear(); // paranoia
@@ -128,10 +141,14 @@ class IntentionPreviewPopup {
      * case and we might be too late, want to start listening as soon as possible - even before the calculation is
      * started is ideal
      */
-    private static boolean addPopupReadyInterceptor(AbstractPopup popup, Consumer<AbstractPopup> onPopupLoadingFinish) {
+    private boolean addPopupReadyInterceptor(AbstractPopup popup, Consumer<AbstractPopup> onPopupLoadingFinish) {
         try {
-            ((JBLoadingPanel) popup.getComponent()).addListener(new PopupLoadingListener(popup, onPopupLoadingFinish));
-            return true;
+            if (popup.getComponent() instanceof JBLoadingPanel) {
+                JBLoadingPanel popupComponent = (JBLoadingPanel) popup.getComponent();
+                popupComponent.addListener(new PopupLoadingListener(popup, onPopupLoadingFinish));
+                boolean noPreviewListenerInstalled = tryToInstallSelectListener(popupComponent, popupProcessor);
+                return true;
+            }
         } catch (Exception e) {
             Logger.getInstance(IntentionPreviewPopup.class).error("Popup error", e);
         }
@@ -140,8 +157,6 @@ class IntentionPreviewPopup {
     } // boolean addPopupReadyInterceptor(AbstractPopup popup, Consumer<AbstractPopup> onPopupLoadingFinish)
 
     /**
-     * TODO somehow check that the index in {@link IntentionPreviewPopupUpdateProcessor#select(int, List)} isn't NO_PREVIEW
-     * Maybe add a finished listener in a different place ?
      * TODO when the preview has an import statement, on the first showing only it will be shown, our code interferes somehow
      */
     private static class PopupLoadingListener implements JBLoadingPanelListener {
@@ -163,8 +178,19 @@ class IntentionPreviewPopup {
         public void onLoadingStart() {}
     } // class PopupLoadingListener
 
+    private static final int NO_PREVIEW = -1;
+
+    static boolean tryToInstallSelectListener(@NotNull JBLoadingPanel popupLoadingPanel, IntentionPreviewPopupUpdateProcessor processor) {
+        try {
+            MultiPanel multiPanel = (MultiPanel) popupLoadingPanel.getContentPanel().getComponents()[0];
+            MultiPanelSelectListener.installSelectListener(multiPanel, NO_PREVIEW, () -> processorCancel.accept(processor));
+            return true;
+        } catch (Exception e) {}
+        return false;
+    } // void tryToInstallSelectListener
+
     private static JBPopup extractPopup(IntentionPreviewPopupUpdateProcessor processor) {
-        return PopupFieldExtractorHolder.popupFieldGetter.apply(processor);
+        return popupFieldGetter.apply(processor);
     }
 
     @Nullable
@@ -202,6 +228,21 @@ class IntentionPreviewPopup {
                                 return (JBPopup) handleToInvoke.invokeExact(o);
                             }
                         });
+            } catch (Exception e) {}
+            return null;
+        }
+
+        static final Consumer<IntentionPreviewPopupUpdateProcessor> processorCancel = Objects.requireNonNullElse(createCancelMethod(), p -> {});
+
+        @Nullable
+        private static Consumer<IntentionPreviewPopupUpdateProcessor> createCancelMethod() {
+            try {
+                Method cancelMethod = ReflectionUtils.getMethod(IntentionPreviewPopupUpdateProcessor.class, "cancel");
+                return processor -> {
+                    try {
+                        cancelMethod.invoke(processor);
+                    } catch (Exception e) {}
+                };
             } catch (Exception e) {}
             return null;
         }

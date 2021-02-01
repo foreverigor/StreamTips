@@ -217,11 +217,9 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   }
 
   private void schedulePopupCreation(@NotNull Editor editor, @NotNull PopupTipContext context, @NotNull IntentionAction action, ProgressIndicator progress) {
-    myAlarm.addRequest(() -> {
-      ApplicationManager.getApplication().invokeLater(() -> {
-        createAndShowPopup(editor, context, action, progress);
-      });
-    }, context.getShowingDelay());
+    myAlarm.addRequest(() -> ApplicationManager.getApplication().invokeLater(() -> {
+      createAndShowPopup(editor, context, action, progress);
+    }), context.getShowingDelay());
   }
 
   /**

@@ -16,18 +16,5 @@ public class Utils {
     return collection.iterator().next();
   }
 
-  public interface UncertainHolder<T> {
-    T get();
-
-    <R> R doIfAvailable(Function<T, R> task);
-
-    default void doIfAvailable(Consumer<T> voidTask) {
-      doIfAvailable(t -> {
-        voidTask.accept(t);
-        return null;
-      });
-    }
-  }
-
   private Utils() {}
 } // class Utils
