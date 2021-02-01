@@ -349,17 +349,14 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
                                         @NotNull PopupTipContext context) {
     ProgressIndicatorBase progress = new ProgressIndicatorBase();
     myCurrentProgress = progress;
-    Application application = ApplicationManager.getApplication();
     myAlarm.addRequest(() -> {
       ProgressManager.getInstance().executeProcessUnderProgress(() -> {
+        Application application = ApplicationManager.getApplication();
         final IntentionAction fixAction = application.runReadAction((Computable<IntentionAction>) () -> context.calculateQuickFixForPopup(progress));
         if (fixAction == null) return;
         application.invokeLater(() -> {
           // All dispatch thread
-          // TODO use new show popup
-          if (progress != myCurrentProgress) {
-            return;
-          }
+          if (canceled(progress)) return;
 
           // After calculations:
           myCurrentProgress = null;
@@ -367,16 +364,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
             return;
           }
 
-          IntentionPreviewPopup fixPopup = IntentionPreviewPopup.createPopup(editor, context.getFileForInspection(), fixAction);
-          if (fixPopup == null) {
-            closePopup();
-          }
-          else {
-            AbstractPopup popup = showPopup(fixPopup, editor, context);
-            myPopupReference = new WeakReference<>(popup);
-            myCurrentEditor = new WeakReference<>(editor);
-            myContext = context;
-          }
+          createAndShowPopup(editor, context, fixAction, myCurrentProgress);
         });
       }, progress);
     }, context.getShowingDelay());

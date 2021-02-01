@@ -1,13 +1,11 @@
 package me.foreverigor.intellij.platform.annotations;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import java.lang.annotation.*;
 
 /**
- * Can only be run on the dispatch thread
+ * Should be run from the dispatch thread
  */
+@Documented
 @Retention(RetentionPolicy.SOURCE)
 @Target({ElementType.TYPE, ElementType.METHOD, ElementType.TYPE_USE, ElementType.PARAMETER})
 public @interface OnDispatchThread {
