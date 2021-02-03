@@ -1,6 +1,7 @@
 package me.foreverigor.intellij.plugin.streamtips.inspect.overrides;
 
 import com.intellij.codeInsight.intention.FileModifier;
+import com.intellij.codeInspection.IntentionWrapper;
 import com.intellij.codeInspection.ProblemDescriptor;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.project.Project;
@@ -20,12 +21,12 @@ import org.jetbrains.annotations.Nullable;
  * processor and it will work fine. This class still exists as a marker and and as the means to get the descriptor,
  * which is needed to get the actual source file.
  */
-public class ClassFileIntentionActionWrapper extends IntentionActionDelegateProxy {
+public class ClassFileIntentionActionWrapper extends IntentionActionWrapper {
 
   private final ProblemDescriptor descriptor;
 
   public ClassFileIntentionActionWrapper(@NotNull ProblemDescriptor descriptor) {
-    super(InspectionUtils.adaptToIntentionAction(descriptor));
+    super(InspectionUtils.adaptToIntentionAction(descriptor), descriptor.getPsiElement().getContainingFile());
     this.descriptor = descriptor; // Descriptor is private in QuickFixWrapper, but we use it to get the generated sourceFile
   }
 

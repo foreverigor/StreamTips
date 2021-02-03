@@ -110,7 +110,7 @@ public class ManualInspectionRunner {
         if (psiFile instanceof ClsFileImpl) { // Workaround for Decompiled Class files
             return descriptor.getPsiElement() != null ? new ClassFileIntentionActionWrapper(descriptor) : null;
         }
-        return InspectionUtils.adaptToIntentionAction(descriptor); // Should be StreamToLoopFix inside
+        return InspectionUtils.adaptToIntentionAction(descriptor, psiFile); // Should be StreamToLoopFix inside
     }
 
     /**

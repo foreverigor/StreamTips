@@ -38,6 +38,7 @@ public class MultiPanelSelectListener {
     });
   } // void tryToInstallSelectListener
 
+  @SuppressWarnings("unchecked")
   private static IdentityHashMap<Integer, JComponent> extractMyContentField(MultiPanel panel) {
     return MyContentFieldHolder.myContentFieldExtractor.apply(panel);
   }
