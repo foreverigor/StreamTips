@@ -47,6 +47,7 @@ import org.jetbrains.concurrency.CancellablePromise;
 import me.foreverigor.intellij.platform.annotations.InvokedLater;
 import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
 import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
+import me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginSettings;
 import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
 
 import java.awt.*;
@@ -121,11 +122,11 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   public void dispose() {}
 
   private static boolean earlyCalculate() {
-    return StreamTipsPluginUtils.getShouldEarlyCalculate();
+    return StreamTipsPluginSettings.getInstance().isShouldEarlyCalculate();
   }
 
   private static boolean chainPopupLoading() {
-    return StreamTipsPluginUtils.getDrawPopupOnPreviewAvailable();
+    return StreamTipsPluginSettings.getInstance().getShouldEarlyLoad();
   }
 
   private void handleMouseMoved(@NotNull EditorMouseEvent e) {
@@ -589,7 +590,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     }
 
     long getShowingDelay() {
-      return Math.max(0, StreamTipsPluginUtils.getPopuptipDelay() - (System.currentTimeMillis() - startTimestamp));
+      return Math.max(0, StreamTipsPluginSettings.getInstance().getPopupTipsDelay() - (System.currentTimeMillis() - startTimestamp));
     }
 
     private static int getElementStartHostOffset(@NotNull PsiElement element) {
@@ -649,7 +650,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
 
   @NotNull
   public static MouseHoverIntentPreviewPopupService getInstance() {
-    return ApplicationManager.getApplication().getService(MouseHoverIntentPreviewPopupService.class);
+    return ApplicationManager.getApplication().getService(MouseHoverIntentPreviewPopupService.class); // Application service
   }
 
   static final class MyEditorMouseMotionEventListener implements EditorMouseMotionListener {

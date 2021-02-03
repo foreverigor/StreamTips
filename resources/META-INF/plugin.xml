@@ -1,17 +1,16 @@
 <idea-plugin>
   <id>me.foreverigor.streamtips</id>
   <name>Java Stream Tooltips</name>
-  <version>0.7</version>
-  <vendor email="foreverigordev@gmail.com" url="http://www.yourcompany.com">foreverigor</vendor>
+  <version>0.9</version>
+  <vendor email="foreverigordev@gmail.com" url="https://github.com/foreverigor">foreverigor</vendor>
 
   <description><![CDATA[
-      Enter short description for your plugin here.<br>
-      <em>most HTML tags may be used</em>
+      Displays popups with a preview of the loop form of a Java Stream.<br>
     ]]></description>
 
   <change-notes><![CDATA[
-      Add change notes here.<br>
-      <em>most HTML tags may be used</em>
+      First Version.<br>
+      gvgzjgvjrfjvbfgbvnmvjhbfrf
     ]]>
   </change-notes>
 
@@ -23,6 +22,11 @@
   <extensions defaultExtensionNs="com.intellij">
     <editorFactoryMouseMotionListener implementation="me.foreverigor.intellij.plugin.streamtips.MouseHoverIntentPreviewPopupService$MyEditorMouseMotionEventListener"/>
     <editorFactoryMouseListener implementation="me.foreverigor.intellij.plugin.streamtips.MouseHoverIntentPreviewPopupService$MyEditorMouseEventListener"/>
+
+    <applicationConfigurable instance="me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginConfigurable"
+                             id="me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginConfigurable"
+                             parentId="other"
+                             displayName="Stream Tips"/>
   </extensions>
 
   <actions>

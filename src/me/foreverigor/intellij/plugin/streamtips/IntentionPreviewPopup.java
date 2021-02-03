@@ -23,6 +23,7 @@ import org.jetbrains.annotations.Nullable;
 import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
 import me.foreverigor.intellij.plugin.streamtips.inspect.overrides.ClassFileIntentionActionWrapper;
 import me.foreverigor.intellij.plugin.streamtips.popup.MultiPanelSelectListener;
+import me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginSettings;
 import me.foreverigor.utils.ReflectionUtils;
 import static me.foreverigor.intellij.plugin.streamtips.IntentionPreviewPopup.PopupFieldExtractorHolder.popupFieldGetter;
 import static me.foreverigor.intellij.plugin.streamtips.IntentionPreviewPopup.PopupFieldExtractorHolder.processorCancel;
@@ -120,7 +121,7 @@ class IntentionPreviewPopup {
                             // This way we essentially fall back to the old behaviour (popup will show loading step)
                         }
                     } else { // We intercepted (and prevented from showing) something different, disable this behaviour:
-                        StreamTipsPluginUtils.setOverrideDisableChainLoading();
+                        StreamTipsPluginSettings.setOverrideDisableChainLoading();
                     }
                 }
             });
@@ -152,7 +153,7 @@ class IntentionPreviewPopup {
         } catch (Exception e) {
             Logger.getInstance(IntentionPreviewPopup.class).error("Popup error", e);
         }
-        StreamTipsPluginUtils.setOverrideDisableChainLoading();
+        StreamTipsPluginSettings.setOverrideDisableChainLoading();
         return false;
     } // boolean addPopupReadyInterceptor(AbstractPopup popup, Consumer<AbstractPopup> onPopupLoadingFinish)
 
