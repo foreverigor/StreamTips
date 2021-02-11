@@ -9,6 +9,10 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import org.jetbrains.annotations.NotNull;
 
+import me.foreverigor.intellij.platform.annotations.Required;
+import me.foreverigor.intellij.plugin.streamtips.StreamTipsPluginDiagnostics;
+import me.foreverigor.utils.ReflectionUtils;
+
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -37,8 +41,9 @@ public class InspectionEngineBridge {
         return (Map<String, List<ProblemDescriptor>>) inspectElementsMethod.invoke(null, toolWrappers, file, iManager, isOnTheFly, indicator, elements, elementDialectIds);
     }
 
-    static class InspectElementsMethodHolder {
-        static final Method inspectElementsMethod = getInspectElementsMethod();
+    public static class InspectElementsMethodHolder {
+        @Required
+        public static final Method inspectElementsMethod = getInspectElementsMethod();
     }
 
     private static final String methodName = "inspectElements";
@@ -54,10 +59,10 @@ public class InspectionEngineBridge {
 
     private static Method getInspectElementsMethod() {
         try {
-            Method inspectElements = InspectionEngine.class.getDeclaredMethod(methodName, paramTypes);
-            inspectElements.setAccessible(true);
-            return inspectElements;
-        } catch (Exception e) {}
+            return ReflectionUtils.getMethod(InspectionEngine.class, methodName, paramTypes);
+        } catch (Exception e) {
+            StreamTipsPluginDiagnostics.recordPluginInitException(e);
+        }
         return null;
     }
 }

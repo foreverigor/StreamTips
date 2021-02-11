@@ -15,6 +15,9 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.impl.compiled.ClsFileImpl;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtilCore;
+
+import me.foreverigor.intellij.platform.annotations.Required;
+import me.foreverigor.intellij.plugin.streamtips.StreamTipsPluginDiagnostics;
 import me.foreverigor.intellij.plugin.streamtips.Utils;
 import me.foreverigor.intellij.plugin.streamtips.inspect.overrides.ClassFileIntentionActionWrapper;
 import me.foreverigor.intellij.plugin.streamtips.inspect.overrides.InspectionManagerOverride;
@@ -133,19 +136,21 @@ public class ManualInspectionRunner {
         return elements;
     } // List<PsiElement> collectRelevantElements(...)
 
-    public static Map<String, LocalInspectionToolWrapper> getInspectionsForPreview() {
+    private static Map<String, LocalInspectionToolWrapper> getInspectionsForPreview() {
         return InspectionsHolder.myInspections;
     }
 
-    private static class InspectionsHolder {
+    public static class InspectionsHolder {
+        @Required
         @NotNull
-        private static final Map<String, LocalInspectionToolWrapper> myInspections = createInspectionsMap();
+        public static final Map<String, LocalInspectionToolWrapper> myInspections = createInspectionsMap();
 
         @NotNull
         private static Map<String, LocalInspectionToolWrapper> createInspectionsMap() {
             try {
                 return inspections().entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, inspection -> new LocalInspectionToolWrapper(inspection.getValue()), (a, b) -> b));
             } catch (Exception e) {
+                StreamTipsPluginDiagnostics.recordPluginInitException(e);
                 return Collections.emptyMap();
             }
         }

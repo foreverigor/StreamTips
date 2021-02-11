@@ -21,6 +21,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
+import me.foreverigor.intellij.platform.annotations.Required;
 import me.foreverigor.intellij.plugin.streamtips.inspect.overrides.ClassFileIntentionActionWrapper;
 import me.foreverigor.intellij.plugin.streamtips.popup.MultiPanelSelectListener;
 import me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginSettings;
@@ -218,6 +219,7 @@ class IntentionPreviewPopup {
     }
 
     static class PopupFieldExtractorHolder {
+        @Required
         static final Function<IntentionPreviewPopupUpdateProcessor, JBPopup> popupFieldGetter = createPopupGetter();
 
         private static Function<IntentionPreviewPopupUpdateProcessor, JBPopup> createPopupGetter() {
@@ -229,7 +231,9 @@ class IntentionPreviewPopup {
                                 return (JBPopup) handleToInvoke.invokeExact(o);
                             }
                         });
-            } catch (Exception e) {}
+            } catch (Exception e) {
+                StreamTipsPluginDiagnostics.recordPluginInitException(e);
+            }
             return null;
         }
 

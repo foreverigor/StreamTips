@@ -21,7 +21,6 @@ public final class StreamTipsPluginSettings implements PersistentStateComponent<
   }
   private static boolean CHAIN_LOADING_OVERRIDE = true;
 
-
   private StreamTipsPluginOptions currentOptions = new StreamTipsPluginOptions();
 
   public int getPopupTipsDelay() {

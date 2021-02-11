@@ -17,6 +17,7 @@ import com.intellij.openapi.actionSystem.ex.AnActionListener;
 import com.intellij.openapi.application.*;
 import com.intellij.openapi.application.impl.LaterInvocator;
 import com.intellij.openapi.components.Service;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
@@ -49,6 +50,7 @@ import me.foreverigor.intellij.platform.annotations.OnDispatchThread;
 import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
 import me.foreverigor.intellij.plugin.streamtips.settings.StreamTipsPluginSettings;
 import static me.foreverigor.intellij.plugin.streamtips.PopupUtils.isPopupDisabled;
+import static me.foreverigor.intellij.plugin.streamtips.Utils.handleExceptions;
 
 import java.awt.*;
 import java.awt.event.KeyEvent;
@@ -65,8 +67,10 @@ import java.util.function.Consumer;
 @Service
 public final class MouseHoverIntentPreviewPopupService implements Disposable {
 
+  private final static boolean enabled = StreamTipsPluginUtils.pluginPrerequisitesAreMet();
+
   // Concurrency:
-  private final Alarm myAlarm;
+  private final Alarm myAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
   private ProgressIndicator myCurrentProgress;
   private CancellablePromise<?> myPreparationTask;
 
@@ -77,7 +81,9 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   private boolean skipNextEvent;
 
   public MouseHoverIntentPreviewPopupService() {
-    myAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
+    if (!enabled) {
+      return;
+    }
     EditorEventMulticaster multicaster = EditorFactory.getInstance().getEventMulticaster();
     multicaster.addCaretListener(new CaretListener() {
       @Override
@@ -656,7 +662,7 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
   static final class MyEditorMouseMotionEventListener implements EditorMouseMotionListener {
     @Override
     public void mouseMoved(@NotNull EditorMouseEvent e) {
-      getInstance().handleMouseMoved(e);
+      if (enabled) handleExceptions(() -> getInstance().handleMouseMoved(e), StreamTipsPluginDiagnostics::handleException);
     }
   }
 
@@ -665,17 +671,17 @@ public final class MouseHoverIntentPreviewPopupService implements Disposable {
     public void mouseEntered(@NotNull EditorMouseEvent event) {
       // we receive MOUSE_MOVED event after MOUSE_ENTERED even if mouse wasn't physically moved,
       // e.g. if a popup overlapping editor has been closed
-      getInstance().skipNextMovement();
+      if (enabled) getInstance().skipNextMovement();
     }
 
     @Override
     public void mouseExited(@NotNull EditorMouseEvent event) {
-      getInstance().cancelCurrentProcessing();
+      if (enabled) getInstance().cancelCurrentProcessing();
     }
 
     @Override
     public void mousePressed(@NotNull EditorMouseEvent event) {
-      getInstance().cancelAndClosePopup();
+      if (enabled) getInstance().cancelAndClosePopup();
     }
   }
 

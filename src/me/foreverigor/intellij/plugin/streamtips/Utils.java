@@ -16,5 +16,13 @@ public class Utils {
     return collection.iterator().next();
   }
 
+  static void handleExceptions(Runnable runnable, Consumer<Exception> handler) {
+    try {
+      runnable.run();
+    } catch (Exception exception) {
+      handler.accept(exception);
+    }
+  }
+
   private Utils() {}
 } // class Utils

@@ -1,16 +1,17 @@
 <idea-plugin>
   <id>me.foreverigor.streamtips</id>
   <name>Java Stream Tooltips</name>
-  <version>0.9</version>
+  <version>1.0</version>
   <vendor email="foreverigordev@gmail.com" url="https://github.com/foreverigor">foreverigor</vendor>
 
   <description><![CDATA[
-      Displays popups with a preview of the loop form of a Java Stream.<br>
+      <strong>Displays popups with the loop form of a Java Stream.</strong>
     ]]></description>
 
   <change-notes><![CDATA[
       First Version.<br>
-      gvgzjgvjrfjvbfgbvnmvjhbfrf
+      Provides 2 ways of calculating the popup. The original way (ported from the Editor Tooltips), also displays a
+      loading message and the new way where the calculations start early and the loading can be hidden.
     ]]>
   </change-notes>
 
@@ -28,9 +29,5 @@
                              parentId="other"
                              displayName="Stream Tips"/>
   </extensions>
-
-  <actions>
-    <!-- Add your actions here -->
-  </actions>
 
 </idea-plugin>

@@ -11,6 +11,9 @@ import com.intellij.ui.layout.panel
 import com.intellij.ui.layout.selected
 import javax.swing.JCheckBox
 
+/**
+ * Reference [com.intellij.ide.GeneralSettingsConfigurable]
+ */
 class StreamTipsPluginConfigurable : BoundCompositeConfigurable<Configurable>("Stream Tips", "streamtips.help"), Configurable {
 
     private val options = StreamTipsPluginSettings.getInstance()

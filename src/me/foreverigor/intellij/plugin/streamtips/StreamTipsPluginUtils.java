@@ -1,25 +1,22 @@
 package me.foreverigor.intellij.plugin.streamtips;
 
+import com.intellij.openapi.diagnostic.Logger;
+
+import me.foreverigor.intellij.plugin.streamtips.inspect.InspectionEngineBridge;
+import me.foreverigor.intellij.plugin.streamtips.inspect.ManualInspectionRunner;
+
 public class StreamTipsPluginUtils {
 
-  private final static int POPUPTIP_DELAY = 2500;
-  private final static boolean EARLY_CALCULATION = true;
-  private final static boolean CHAIN_LOADING = true;
-  private static boolean CHAIN_LOADING_OVERRIDE = true;
+  final static String StreamTips = "StreamTips";
 
-  static int getPopuptipDelay() {
-    return POPUPTIP_DELAY;
+  static boolean pluginPrerequisitesAreMet() {
+    boolean b = !ManualInspectionRunner.InspectionsHolder.myInspections.isEmpty() &&
+            InspectionEngineBridge.InspectElementsMethodHolder.inspectElementsMethod != null &&
+            IntentionPreviewPopup.PopupFieldExtractorHolder.popupFieldGetter != null;
+    if (!b) {
+      Logger.getInstance(StreamTips).error("One of the initialization steps required for plugin function failed, StreamTips plugin will be disabled");
+    }
+    return b;
   }
 
-  static boolean getShouldEarlyCalculate() {
-    return EARLY_CALCULATION;
-  }
-
-  static void setOverrideDisableChainLoading() {
-    CHAIN_LOADING_OVERRIDE = false;
-  }
-
-  static boolean getDrawPopupOnPreviewAvailable() {
-    return CHAIN_LOADING && CHAIN_LOADING_OVERRIDE;
-  }
 }
