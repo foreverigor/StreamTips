@@ -1,11 +1,14 @@
 <idea-plugin>
   <id>me.foreverigor.streamtips</id>
   <name>Java Stream Tooltips</name>
-  <version>1.0</version>
+  <version>1.0.1</version>
   <vendor email="foreverigordev@gmail.com" url="https://github.com/foreverigor">foreverigor</vendor>
 
   <description><![CDATA[
       <strong>Displays popups with the loop form of a Java Stream.</strong>
+
+      <p><img src="https://raw.githubusercontent.com/foreverigor/StreamTips/with-ressources/screenshots/PopupScreenshot.png"
+                 border="0" width="500" height="167" alt="screenshot-of-popup"/></p>
     ]]></description>
 
   <change-notes><![CDATA[
