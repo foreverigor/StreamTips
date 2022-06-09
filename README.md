@@ -1,3 +1,5 @@
+[![JetBrains Plugins](https://img.shields.io/jetbrains/plugin/v/16095)](https://plugins.jetbrains.com/plugin/16095-java-stream-tooltips) [![JetBrains plugins](https://img.shields.io/jetbrains/plugin/d/16095)](https://plugins.jetbrains.com/plugin/16095-java-stream-tooltips)
+
 # StreamTips Plugin
 
 Provides popups with the loop form of Java 8 Streams.
